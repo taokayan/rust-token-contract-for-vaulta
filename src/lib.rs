@@ -381,13 +381,18 @@ fn u64_to_name(name: u64) -> String {
 
 #[no_mangle]
 pub fn apply(receiver: u64, code: u64, action: u64) {
-    if (action == name_to_u64("create")) {
-        action_create();
-    } else if (action == name_to_u64("issue")) {
-        action_issue(code);
-    } else if (action == name_to_u64("transfer")) {
-        action_transfer(code);
+    if (receiver == code) {
+        // in contract execution
+        if (action == name_to_u64("create")) {
+            action_create();
+        } else if (action == name_to_u64("issue")) {
+            action_issue(code);
+        } else if (action == name_to_u64("transfer")) {
+            action_transfer(code);
+        } else {
+            check(false, "unknown action");
+        }
     } else {
-        check(false, "unknown action");
+        // in notification
     }
 }
