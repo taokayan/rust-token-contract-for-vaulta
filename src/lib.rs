@@ -2,7 +2,16 @@
 #[no_mangle]
 extern "C" {
     pub fn prints_l(data: *const u8, len: u32);
+
+    //Verify specified account exists in the set of provided auths
     pub fn require_auth(name: u64);
+
+    // Add the specified account to set of accounts to be notified
+    pub fn require_recipient(name: u64);
+
+    // Check if account exist
+    pub fn is_account(name: u64)->i32; // return bool
+
     pub fn eosio_assert_message(test: u32, msg: *const u8, len :u32 );
     pub fn current_time()-> u64;
     pub fn get_block_num()-> u32;
@@ -101,6 +110,29 @@ fn stream_read_u64(stream: &Vec<u8>, offset: usize)->(u64, usize) {
     val = val + stream[offset + 1] as u64;  val = (val << 8);
     val = val + stream[offset] as u64; 
     return (val, 8);
+}
+
+fn stream_append_string(s: &str, stream: &mut Vec<u8>) {
+    let sbytes = s.as_bytes();
+    // FIXME: support longer string (handle stop bits)
+    check(sbytes.len() <= 127, "string too long");
+    stream.push(sbytes.len() as u8);
+    stream.extend_from_slice(sbytes);
+}
+
+fn stream_read_string(stream: &Vec<u8>, offset: usize)->(String, usize) {
+    let mut len:u8 = stream[offset];
+    // FIXME: support longer string (handle stop bits)
+    check(len <= 127, "string too long");
+    let mut v: Vec<u8> = Vec::new();
+    let mut p = offset + 1;
+    while (len > 0) {
+        v.push(stream[p]);
+        len = len - 1;
+        p = p + 1;
+    }
+    let str:String = unsafe { String::from_utf8_unchecked(v) };
+    return (str, p - offset);
 }
 
 // standard table format for Vaulta asset row:
@@ -281,20 +313,34 @@ struct issue_param_t {
 fn stream_read_issue_param_t(stream: &Vec<u8>)-> issue_param_t {
     let (_to, offset1) = stream_read_u64(&stream, 0);
     let (_quantity, offset2) = stream_read_asset(&stream, offset1);
+    let (_memo, offset3) = stream_read_string(&stream, offset1+offset2);
     let ret = issue_param_t {
         to: _to, 
         quantity: _quantity,
-        memo: String::from("") // <--- FIXME: decode memo
+        memo: _memo
     };
     return ret;
 }
 fn action_issue(_selfcode:u64) {
     let stream = read_action_data_as_vec();
     let param: issue_param_t = stream_read_issue_param_t(&stream);
+
     check(param.quantity.amount > 0, "issue quantity must > 0");
+
+    let debug = true; // <-- turn debug on or off here
+    if (debug) {
+        let s = String::from("issue memo:") + &param.memo; 
+        print(&s);
+    }
+
     let stat:currency_stats_t = _add_stat(_selfcode, &param.quantity);
     unsafe { require_auth(stat.issuer); }
     _add_balance(_selfcode, param.to, &param.quantity, stat.issuer);
+
+    unsafe {
+        require_recipient(stat.issuer);
+        require_recipient(param.to);
+    }
 }
 
 // action transfer (from, to, quantity, memo)
@@ -308,11 +354,12 @@ fn stream_read_transfer_param_t(stream: &Vec<u8>)-> transfer_param_t {
     let (_from, offset1) = stream_read_u64(&stream, 0);
     let (_to, offset2) = stream_read_u64(&stream, offset1);
     let (_quantity, offset3) = stream_read_asset(&stream, offset1+offset2);
+    let (_memo, offset4) = stream_read_string(&stream, offset1+offset2+offset3);
     let ret = transfer_param_t {
         from: _from, 
         to: _to,
         quantity: _quantity,
-        memo: String::from(""), // FIXME: decode memo
+        memo: _memo
     };
     return ret;
 }
@@ -323,6 +370,11 @@ fn action_transfer(_selfcode:u64) {
     check(param.quantity.amount > 0, "transfer quantity must > 0");
     _sub_balance(_selfcode, param.from, &param.quantity, param.from);
     _add_balance(_selfcode, param.to, &param.quantity, param.from);
+
+    unsafe {
+        require_recipient(param.from);
+        require_recipient(param.to);
+    }
 }
 
 fn check(test: bool, s: &str) {
